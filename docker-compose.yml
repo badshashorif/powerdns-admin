@@ -1,0 +1,63 @@
+#version: '3.8'
+
+services:
+  pdns-db:
+    image: mariadb:10.5
+    container_name: pdns-db
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: pdns
+      MYSQL_USER: pdns
+      MYSQL_PASSWORD: pdns
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./init/init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+
+  pdns-auth:
+    image: psitrax/powerdns
+    container_name: pdns-auth
+    ports:
+      - "5300:53/udp"
+      - "5300:53/tcp"
+    volumes:
+      - ./configs/pdns.conf:/etc/powerdns/pdns.conf
+    environment:
+      PDNS_gmysql_host: pdns-db
+      PDNS_gmysql_user: pdns
+      PDNS_gmysql_password: pdns
+      PDNS_gmysql_dbname: pdns
+      PDNS_api: "yes"
+      PDNS_api_key: PowerDns@2025#
+      PDNS_webserver: "yes"
+      PDNS_webserver_address: 0.0.0.0
+      PDNS_webserver_allow_from: 0.0.0.0/0
+      PDNS_webserver_password: PowerDns@2025#
+    depends_on:
+      - pdns-db
+    restart: unless-stopped
+
+  pdns-recursor:
+    image: pschiffe/pdns-recursor
+    container_name: pdns-recursor
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+    volumes:
+      - ./configs/recursor.conf:/etc/pdns/recursor.conf
+    restart: unless-stopped
+
+  pdns-admin:
+    image: powerdnsadmin/pda-legacy:latest
+    container_name: pdns-admin
+    ports:
+      - "9191:8000"
+    env_file:
+      - ./configs/powerdns-admin.env
+    depends_on:
+      - pdns-db
+      - pdns-auth
+    restart: unless-stopped
+
+volumes:
+  db_data:
