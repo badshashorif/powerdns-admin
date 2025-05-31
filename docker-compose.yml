@@ -1,63 +1,112 @@
-#version: '3.8'
+version: '3.8'
 
 services:
-  pdns-db:
+  mysql:
     image: mariadb:10.5
-    container_name: pdns-db
-    environment:
-      MYSQL_ROOT_PASSWORD: rootpass
-      MYSQL_DATABASE: pdns
-      MYSQL_USER: pdns
-      MYSQL_PASSWORD: pdns
-    volumes:
-      - db_data:/var/lib/mysql
-      - ./init/init.sql:/docker-entrypoint-initdb.d/init.sql
+    container_name: mysql
+    env_file: .env.mysql
     restart: unless-stopped
+    volumes:
+      - ./pdns-db:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      dnsnet:
+        ipv4_address: 172.28.0.2
 
   pdns-auth:
-    image: psitrax/powerdns
+    image: pschiffe/pdns-mysql
     container_name: pdns-auth
-    ports:
-      - "5300:53/udp"
-      - "5300:53/tcp"
-    volumes:
-      - ./configs/pdns.conf:/etc/powerdns/pdns.conf
-    environment:
-      PDNS_gmysql_host: pdns-db
-      PDNS_gmysql_user: pdns
-      PDNS_gmysql_password: pdns
-      PDNS_gmysql_dbname: pdns
-      PDNS_api: "yes"
-      PDNS_api_key: PowerDns@2025#
-      PDNS_webserver: "yes"
-      PDNS_webserver_address: 0.0.0.0
-      PDNS_webserver_allow_from: 0.0.0.0/0
-      PDNS_webserver_password: PowerDns@2025#
-    depends_on:
-      - pdns-db
+    env_file: .env.auth
     restart: unless-stopped
+    depends_on:
+      - mysql
+#    ports:
+#      - "5300:53/udp"
+#      - "5300:53/tcp"
+    networks:
+      dnsnet:
+        ipv4_address: 172.28.0.3
 
   pdns-recursor:
     image: pschiffe/pdns-recursor
     container_name: pdns-recursor
+    restart: unless-stopped
+#    ports:
+#      - "5301:53/udp"
+#      - "5301:53/tcp"
+    networks:
+      dnsnet:
+        ipv4_address: 172.28.0.4
+    volumes:
+      - ./recursor.conf:/etc/pdns-recursor/recursor.conf
+
+  dnsdist:
+    build:
+      context: ./dnsdist
+    container_name: dnsdist
+    restart: unless-stopped
+    volumes:
+      - ./dnsdist/dnsdist.conf:/etc/dnsdist/dnsdist.conf
     ports:
       - "53:53/udp"
       - "53:53/tcp"
-    volumes:
-      - ./configs/recursor.conf:/etc/pdns/recursor.conf
-    restart: unless-stopped
-
-  pdns-admin:
-    image: powerdnsadmin/pda-legacy:latest
-    container_name: pdns-admin
-    ports:
-      - "9191:8000"
-    env_file:
-      - ./configs/powerdns-admin.env
     depends_on:
-      - pdns-db
       - pdns-auth
-    restart: unless-stopped
+      - pdns-recursor
+    networks:
+      dnsnet:
+        ipv4_address: 172.28.0.5
 
-volumes:
-  db_data:
+  pdns-admin-mysql:
+    image: pschiffe/pdns-admin
+    container_name: pdns-admin
+    env_file: .env.admin
+    restart: unless-stopped
+#    ports:
+#      - '127.0.0.1:8080:8080'
+    networks:
+      dnsnet:
+        ipv4_address: 172.28.0.6
+    depends_on:
+      - mysql
+      - pdns-auth
+    volumes:
+      - ./pdns-admin-data:/data
+
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./nginx/certs:/etc/letsencrypt
+      - ./nginx/www:/var/www/html
+      - ./nginx/letsencrypt:/var/lib/letsencrypt
+    depends_on:
+      - pdns-admin-mysql
+    restart: unless-stopped
+    networks:
+      dnsnet:
+        ipv4_address: 172.28.0.7
+
+  certbot:
+    image: certbot/certbot
+    container_name: certbot
+    volumes:
+      - ./nginx/certs:/etc/letsencrypt
+      - ./nginx/www:/var/www/html
+      - ./nginx/letsencrypt:/var/lib/letsencrypt
+    entrypoint: /bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/html; sleep 12h & wait $${!}; done'
+    restart: unless-stopped
+    networks:
+      dnsnet:
+        ipv4_address: 172.28.0.8
+
+networks:
+  dnsnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
