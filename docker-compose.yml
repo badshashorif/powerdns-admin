@@ -51,6 +51,7 @@ services:
       - "53:53/udp"
       - "53:53/tcp"
     depends_on:
+      - mysql
       - pdns-auth
       - pdns-recursor
     networks:
